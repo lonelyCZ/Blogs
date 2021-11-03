@@ -13,6 +13,9 @@ creation-date: 2021-09-27
 
 ---
 
+
+
+
 # Virtual Cluster On Kubeedge
 
 <!--
@@ -138,17 +141,23 @@ required) or even code snippets. If there's any ambiguity about HOW your
 proposal will be implemented, this is the place to discuss them.
 -->
 
-**Agent**: In the original Karmada architecture, an Agent corresponding to an ApiServer can only manage one Cluster, but the whole KubeEdge has only one ApiServer. After dividing KubeEdge into multiple virtual clusters, An Agent needs to be transformed to manage multiple virtual clusters.
+### Agent 
+In the original Karmada architecture, an Agent corresponding to an ApiServer can only manage one Cluster, but the whole KubeEdge has only one ApiServer. After dividing KubeEdge into multiple virtual clusters, An Agent needs to be transformed to manage multiple virtual clusters.
 
 ![image](https://i.bmp.ovh/imgs/2021/09/ac977055beebeefe.png)
 
-**namespace**: When the native Karmada deploy resources, it deploy resources with the same namespace and name in the corresponding cluster. However, there is actually only one APIServer in KubeEdge, so namespace is needed to isolate resources deployed in the virtual cluster.
+### Isolation namespace
+When the native Karmada deploy resources, it deploy resources with the same namespace and name in the corresponding cluster. However, there is actually only one APIServer in KubeEdge, so namespace is needed to isolate resources deployed in the virtual cluster.
 
 For example, an Nginx application is deployed in Karmada's Edge namespace, but in KubeEdge it should be deployed in edge-V-ClusterA namespace and Edge-V-ClusterB namespace.
 
 ![image](https://i.bmp.ovh/imgs/2021/09/2f6afb5af1b7e703.png)
 
-#### Realization effect
+### Authorization for vitual clusters
+
+### Service for 
+
+## Realization effect
 
 Namespace
 
