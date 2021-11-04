@@ -26,12 +26,12 @@ However, with the increasing geographical distribution, operation and maintenanc
 
 * Pods can be deployed to multiple groupings with a single Deployment
 * The number of copies required for each grouping is realized by writing policies(According to the weight or others)
-* Pods rescheduling is supported when policies are changed.
-* Extending kube-scheduler by scheduler-extenders.
+* Pods rescheduling is supported when policies are changed
+* Extending kube-scheduler by scheduler-extenders
 
 ### Non-goals
 
-* All Pods are scheduled by scheduler-extender
+* Copy everything from karmada
 
 ## Proposal
 
