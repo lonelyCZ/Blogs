@@ -13,6 +13,20 @@ status: implementable
 
 # Nodes Grouping Management
 
+- [Nodes Grouping Management](#nodes-grouping-management)
+	- [Motivation](#motivation)
+		- [Goals](#goals)
+		- [Non-goals](#non-goals)
+	- [Proposal](#proposal)
+		- [Use Cases](#use-cases)
+	- [Design Details](#design-details)
+		- [Architecture Diagram](#architecture-diagram)
+		- [New Cluster API](#new-cluster-api)
+		- [New PropagationPolicy API](#new-propagationpolicy-api)
+		- [New ReplicaSchedulingPolicy API](#new-replicaschedulingpolicy-api)
+		- [Example](#example)
+		- [Test Plan](#test-plan)
+
 ## Motivation
 In edge computing scenarios, compute nodes are geographically distributed. The same application may be deployed on compute nodes in different regions.
 
