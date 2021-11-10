@@ -28,20 +28,20 @@ status: implementable
 		- [Test Plan](#test-plan)
 
 ## Motivation
-In edge computing scenarios, compute nodes are geographically distributed. The same application may be deployed on compute nodes in different regions.
+In edge computing scenarios, nodes are geographically distributed. The same application may be deployed on nodes in different regions.
 
-Taking Deployment as an example, the traditional practice is to first set the same label for edge nodes in the same region, and then create multiple Deployments. Different deployments select different labels through NodeSelector, so as to meet the requirements of deploying the same application to different regions.
+Taking Deployment as an example, the traditional practice is to set the same label for edge nodes in the same region, and then create Deployment per region. Different deployments select nodes in different regions through NodeSelector.
 
 ![image](https://camo.githubusercontent.com/f128002038cd1f1cae5e742c3cb1fa558610e9499527066f83aaffbe2b64bfbd/68747470733a2f2f692e626d702e6f76682f696d67732f323032312f30392f306234666234393264663930623335612e706e67)
 
-However, with the increasing geographical distribution, operation and maintenance becomes more and more complex. 
+However, with the increasing geographical distribution, operation and maintenance become more and more complex. 
 
 ### Goals
 
 * Pods can be deployed to multiple groupings with a single Deployment
-* The number of copies required for each grouping is realized by writing policies(According to the weight or others)
-* Pods rescheduling is supported when policies are changed
-* Extending kube-scheduler by scheduler-extenders
+* The number of replicas required for each grouping is specified in the relative policy(According to the weight or others)
+* Support pods rescheduling when the relative policy has been changed
+* Extend kube-scheduler with scheduler-extender to avoid recompilation
 
 ### Non-goals
 
@@ -52,18 +52,34 @@ However, with the increasing geographical distribution, operation and maintenanc
 
 ### Use Cases
 
-* Defining a Cluster to indicate which nodes belong to the group
-* Defining policies that indicate which clusters the Pods need to be deployed in, and assign copies according to their weight
+* Define a Cluster CRD to indicate which nodes belong to the cluster
+* Define a policy CRD that specifies where and how many the Pods need to be deployed 
 
 ## Design Details
 
 ### Architecture Diagram
 
-![image](https://i.bmp.ovh/imgs/2021/11/b039a9ebbad1aa7f.png)
+![image](https://i.bmp.ovh/imgs/2021/11/ddb1131b2e92c0e9.png)
 
-We can extend kube-scheduler's functionality with scheduler-extender to re-score each node according to our grouping policy, so that pods can be scheduled to the appropriate grouping.
+We can extend kube-scheduler with scheduler-extender to score each node according to the policy, so that pods can be scheduled to the appropriate cluster.
 
-The PropagationPolicy contains the nodes to which the Pods in Deployment are scheduled based on their weight. The Server made up of scheduler-extender and PolicyController  is used to score the nodes for the pods with annotation `groupingpolicy.kubeedge.io`.
+Policy specifies the weights of pod replica number for different clusters. The Server made up of scheduler-extender and PolicyController  is used to score the nodes for the pods with annotation `groupingpolicy.kubeedge.io`.
+
+### Scheduler
+
+#### Filter
+
+
+
+#### Score
+
+
+
+### Controller
+
+
+
+#### Reconcile
 
 
 
@@ -258,6 +274,16 @@ type ReplicaSchedulingPolicyList struct {
 
 ### Example
 
+
+
+#### Enable scheduler-extender
+
+
+
+
+
+####  Deploy Application with policy
+
 The deployment template
 
 ```yaml
@@ -309,6 +335,12 @@ spec:
               - hangzhou
         weight: 3
 ```
+
+
+
+#### Deployment result
+
+
 
 
 
