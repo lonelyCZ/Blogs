@@ -5,7 +5,7 @@ authors:
 approvers:
   
 creation-date: 2021-11-03
-last-updated: 2021-11-03
+last-updated: 2021-11-11
 status: implementable
 ---
 
@@ -59,7 +59,7 @@ However, with the increasing geographical distribution, operation and maintenanc
 
 ### Architecture Diagram
 
-![image](https://i.bmp.ovh/imgs/2021/11/ddb1131b2e92c0e9.png)
+![image](https://i.bmp.ovh/imgs/2021/11/6785d566e09a5746.png)
 
 We can extend kube-scheduler with scheduler-extender to score each node according to the policy, so that pods can be scheduled to the appropriate cluster.
 
@@ -101,20 +101,6 @@ type Cluster struct {
 }
 
 type ClusterSpec struct {
-	// Region represents the region of the member cluster locate in.
-	// +optional
-	Region string `json:"region,omitempty"`
-
-	// Zone represents the zone of the member cluster locate in.
-	// +optional
-	Zone string `json:"zone,omitempty"`
-
-	// Taints attached to the member cluster.
-	// Taints on the cluster have the "effect" on
-	// any resource that does not tolerate the Taint.
-	// +optional
-	Taints []corev1.Taint `json:"taints,omitempty"`
-
 	// Nodes contains names of all the nodes in the cluster.
 	Nodes []string `json:"nodes"`
 
@@ -122,17 +108,10 @@ type ClusterSpec struct {
 	MatchLabels map[string]string `json:"matchLables,omitempty"`
 }
 
-// Cluster is the Schema for the clusters API
-type Cluster struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	// Spec represents the specification of the desired behavior of member cluster.
-	Spec ClusterSpec `json:"spec"`
-
-	// Status represents the status of member cluster.
+type ClusterStatus struct {
+	// ContainedNodes represents names of all nodes the cluster contains.
 	// +optional
-	Status ClusterStatus `json:"status,omitempty"`
+	ContainedNodes []string `json:"containedNodes,omitempty"`
 }
 
 ```
@@ -151,7 +130,6 @@ type PropagationPolicy struct {
 	Spec PropagationSpec `json:"spec"`
 }
 
-// PropagationSpec represents the desired behavior of PropagationPolicy.
 type PropagationSpec struct {
 	// ResourceSelectors used to select resources.
 	// +required
@@ -187,62 +165,8 @@ type ResourceSelector struct {
 	// +optional
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 }
-
 // Placement represents the rule for select clusters.
 type Placement struct {
-	// ClusterAffinity represents scheduling restrictions to a certain set of clusters.
-	// If not set, any cluster can be scheduling candidate.
-	// +optional
-	ClusterAffinity *ClusterAffinity `json:"clusterAffinity,omitempty"`
-
-	// ClusterTolerations represents the tolerations.
-	// +optional
-	ClusterTolerations []corev1.Toleration `json:"clusterTolerations,omitempty"`
-
-	// SpreadConstraints represents a list of the scheduling constraints.
-	// +optional
-	SpreadConstraints []SpreadConstraint `json:"spreadConstraints,omitempty"`
-
-	// ReplicaScheduling represents the scheduling policy on dealing with the number of replicas
-	// when propagating resources that have replicas in spec (e.g. deployments, statefulsets) to member clusters.
-	// +optional
-	ReplicaScheduling *ReplicaSchedulingStrategy `json:"replicaScheduling,omitempty"`
-}
-```
-
-
-
-### New ReplicaSchedulingPolicy API
-
-ReplicaSchedulingPolicy represents the policy that propagates total number of replicas for deployment.
-
-```go
-type ReplicaSchedulingPolicy struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	// Spec represents the desired behavior of ReplicaSchedulingPolicy.
-	Spec ReplicaSchedulingSpec `json:"spec"`
-}
-
-// ReplicaSchedulingSpec represents the desired behavior of ReplicaSchedulingPolicy.
-type ReplicaSchedulingSpec struct {
-	// ResourceSelectors used to select resources.
-	// +required
-	ResourceSelectors []ResourceSelector `json:"resourceSelectors"`
-
-	// TotalReplicas represents the total number of replicas across member clusters.
-	// The replicas(spec.replicas) specified for deployment template will be discarded.
-	// +required
-	TotalReplicas int32 `json:"totalReplicas"`
-
-	// Preferences describes weight for each cluster or for each group of cluster.
-	// +required
-	Preferences ClusterPreferences `json:"preferences"`
-}
-
-// ClusterPreferences describes weight for each cluster or for each group of cluster.
-type ClusterPreferences struct {
 	// StaticWeightList defines the static cluster weight.
 	// +required
 	StaticWeightList []StaticClusterWeight `json:"staticWeightList"`
@@ -250,27 +174,16 @@ type ClusterPreferences struct {
 
 // StaticClusterWeight defines the static cluster weight.
 type StaticClusterWeight struct {
-	// TargetCluster describes the filter to select clusters.
+	// ClusterNames specifies clusters with names.
 	// +required
-	TargetCluster ClusterAffinity `json:"targetCluster"`
+	ClusterNames []string `json:"clusterNames"`
 
 	// Weight expressing the preference to the cluster(s) specified by 'TargetCluster'.
 	// +kubebuilder:validation:Minimum=1
 	// +required
 	Weight int64 `json:"weight"`
 }
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-// ReplicaSchedulingPolicyList contains a list of ReplicaSchedulingPolicy.
-type ReplicaSchedulingPolicyList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ReplicaSchedulingPolicy `json:"items"`
-}
 ```
-
-
 
 ### Example
 
