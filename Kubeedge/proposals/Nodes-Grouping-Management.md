@@ -8,9 +8,6 @@ creation-date: 2021-11-03
 last-updated: 2021-11-11
 status: implementable
 ---
-
-
-
 # Nodes Grouping Management
 
 - [Nodes Grouping Management](#nodes-grouping-management)
@@ -21,10 +18,17 @@ status: implementable
 		- [Use Cases](#use-cases)
 	- [Design Details](#design-details)
 		- [Architecture Diagram](#architecture-diagram)
+		- [Scheduler](#scheduler)
+			- [Filter](#filter)
+			- [Score](#score)
+		- [Controller](#controller)
+			- [Reconcile](#reconcile)
 		- [New Cluster API](#new-cluster-api)
 		- [New PropagationPolicy API](#new-propagationpolicy-api)
-		- [New ReplicaSchedulingPolicy API](#new-replicaschedulingpolicy-api)
 		- [Example](#example)
+			- [Enable scheduler-extender](#enable-scheduler-extender)
+			- [Deploy Application with policy](#deploy-application-with-policy)
+			- [Deployment result](#deployment-result)
 		- [Test Plan](#test-plan)
 
 ## Motivation
@@ -37,57 +41,48 @@ Taking Deployment as an example, the traditional practice is to set the same lab
 However, with the increasing geographical distribution, operation and maintenance become more and more complex. 
 
 ### Goals
-
-* Pods can be deployed to multiple groupings with a single Deployment
-* The number of replicas required for each grouping is specified in the relative policy(According to the weight or others)
-* Support pods rescheduling when the relative policy has been changed
-* Extend kube-scheduler with scheduler-extender to avoid recompilation
+* Pods can be deployed to multiple groups of nodes with a single Deployment.
+* The number of pod replicas required for each node group is specified in the relative policy.
+* Support pod rescheduling when the relative policy has been changed.
+* Extend kube-scheduler with scheduler-extender to avoid recompilation.
 
 ### Non-goals
-
 * Copy everything from karmada
 
 ## Proposal
-
-
 ### Use Cases
-
-* Define a Cluster CRD to indicate which nodes belong to the cluster
-* Define a policy CRD that specifies where and how many the Pods need to be deployed 
+* Define a Cluster CR to indicate which nodes belong to the cluster.
+* Define a Policy CR that specifies which cluster the pods should be deployed in and how many pods need to be deployed in this cluster.
 
 ## Design Details
-
 ### Architecture Diagram
-
 ![image](https://i.bmp.ovh/imgs/2021/11/6785d566e09a5746.png)
+The implementation consists of two new components: Scheduler-Extender and PolicyController. The introduction of both two component is as follows.   
+Note: All of the machanisms only work on pods with the annotation key of `groupingpolicy.kubeedge.io`.
 
-We can extend kube-scheduler with scheduler-extender to score each node according to the policy, so that pods can be scheduled to the appropriate cluster.
-
-Policy specifies the weights of pod replica number for different clusters. The Server made up of scheduler-extender and PolicyController  is used to score the nodes for the pods with annotation `groupingpolicy.kubeedge.io`.
 
 ### Scheduler
-
+The [scheduler-extender](//TODO:) is a feature supported by kubernetes to extend the capability of kube-scheduler. The scheduler-extender takes the responsibilty of filtering out the irrelevant nodes and scoring each condidate node according to the relative policy, so that pods can finally be scheduled to the appropriate cluster.  
 #### Filter
-
-
+After kube-scheduler running all built-in filter plugins, it will send the fitered nodes to scheduler-extender for futher filtering. The scheduler-extender will filter out nodes the pod should not be placed on according to the policy, then send all condidiate nodes back to kube-scheduler to continue the scheduling progress. The nodes that will be filtered out in scheduler-extender are as follows:  
+1. Node that is not in any cluster which the pod should be scheduled to
+2. Node that is in the cluster which has already had enough replica number of the pod
 
 #### Score
-
+Scheduler-extender will give a score for each candidate node that has passed the filter, and then send its scores back to the kube-scheduler. Kube-scheduler will combine all score results(from score plugins and the scheduler-extender), and finally picks one has the highest score. The score policy of scheduler-extender is mainly based on the difference between current pod replica number and descired pod replica number in the cluster. In other words, a node will get a higher score if it's in a cluster with greater value of `DesiredPodReplicaNumber - CurrentPodReplicaNumber`.  
+> Note:  
+> The score policy of scheduler-extender is at the cluster level, which means all nodes in the same cluster will get the same score from schduler-extender. The prioritization among these nodes depends on other score plugins in kube-scheduler, such as `NodeAffinityPriority`.
 
 
 ### Controller
-
-
-
+PolicyController is responsible for reconciling the current replica number of distributed pods in each cluster with the desried distribution status which is defined in the policy. It will evict pods in clusters where they should not run and also evict pods in clusters when they are redundant(which means the current replica number in the cluster exceeds what the policy desires).   
 #### Reconcile
-
-
+PolicyController is continuously watching the Add/Update/Delete event of Policy and Cluster resource. When some events occur, policy controller will find the associated clusters and policies, then delete pods that are not needed or redundant.  
 
 ### New Cluster API
-
-Cluster, which groups nodes mainly through node labels, also collects resource situations for all the nodes in the cluster for scheduling analysis.
-
+Cluster represents a group of nodes that has the same labels.
 ```go
+// Cluster is the Schema for the clusters API
 type Cluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -100,25 +95,26 @@ type Cluster struct {
 	Status ClusterStatus `json:"status,omitempty"`
 }
 
+// ClusterSpec defines the desired state of Cluster
 type ClusterSpec struct {
 	// Nodes contains names of all the nodes in the cluster.
 	Nodes []string `json:"nodes"`
 
-	// MatchLabels match the nodes that have the labels
+	// MatchLabels matches the nodes that have the labels
 	MatchLabels map[string]string `json:"matchLables,omitempty"`
 }
 
+// ClusterStatus defines the observed state of Cluster
 type ClusterStatus struct {
 	// ContainedNodes represents names of all nodes the cluster contains.
 	// +optional
 	ContainedNodes []string `json:"containedNodes,omitempty"`
 }
-
 ```
 
 ### New PropagationPolicy API
 
-PropagationPolicy represents the policy that propagates a group of resources to one or more clusters.
+PropagationPolicy specifies how to propagate pods to clusters.
 
 ```go
 type PropagationPolicy struct {
@@ -165,8 +161,9 @@ type ResourceSelector struct {
 	// +optional
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 }
-// Placement represents the rule for select clusters.
-type Placement struct {
+
+// ClusterPreferences describes weight for each cluster or for each group of cluster.
+type ClusterPreferences struct {
 	// StaticWeightList defines the static cluster weight.
 	// +required
 	StaticWeightList []StaticClusterWeight `json:"staticWeightList"`
@@ -184,7 +181,6 @@ type StaticClusterWeight struct {
 	Weight int64 `json:"weight"`
 }
 ```
-
 ### Example
 
 
@@ -193,12 +189,8 @@ type StaticClusterWeight struct {
 
 
 
-
-
 ####  Deploy Application with policy
-
 The deployment template
-
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -221,10 +213,7 @@ spec:
         name: nginx
 ```
 
-
-
 The PropagationPolicy for nginx deployment
-
 ```yaml
 apiVersion: policy.kubeedge.io/v1alpha1
 kind: PropagationPolicy
@@ -237,23 +226,14 @@ spec:
       name: nginx
   placement:
     staticWeightList:
-      - targetCluster:
-          clusterAffinity:
-            clusterNames:
-              - beijing
+      - clusterNames:
+		- beijing
         weight: 2
-      - targetCluster:
-          clusterAffinity:
-            clusterNames:
-              - hangzhou
+      - clusterNames:
+        - hangzhou
         weight: 3
 ```
-
-
-
 #### Deployment result
-
-
 
 
 
