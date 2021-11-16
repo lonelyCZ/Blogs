@@ -62,7 +62,7 @@ Note: All of the machanisms only work on pods with the annotation key of `groupi
 
 
 ### Scheduler
-The [scheduler-extender](//TODO:) is a feature supported by kubernetes to extend the capability of kube-scheduler. The scheduler-extender takes the responsibilty of filtering out the irrelevant nodes and scoring each condidate node according to the relative policy, so that pods can finally be scheduled to the appropriate cluster.  
+The [scheduler-extender](https://github.com/kubernetes/enhancements/tree/master/keps/sig-scheduling/1819-scheduler-extender) is a feature supported by kubernetes to extend the capability of kube-scheduler. The scheduler-extender takes the responsibilty of filtering out the irrelevant nodes and scoring each condidate node according to the relative policy, so that pods can finally be scheduled to the appropriate cluster.  
 #### Filter
 After kube-scheduler running all built-in filter plugins, it will send the fitered nodes to scheduler-extender for futher filtering. The scheduler-extender will filter out nodes the pod should not be placed on according to the policy, then send all condidiate nodes back to kube-scheduler to continue the scheduling progress. The nodes that will be filtered out in scheduler-extender are as follows:  
 1. Node that is not in any cluster which the pod should be scheduled to
