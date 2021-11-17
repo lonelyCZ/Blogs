@@ -227,7 +227,7 @@ spec:
   placement:
     staticWeightList:
       - clusterNames:
-		- beijing
+        - beijing
         weight: 2
       - clusterNames:
         - hangzhou
