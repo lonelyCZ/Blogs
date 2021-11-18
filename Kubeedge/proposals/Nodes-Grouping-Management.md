@@ -5,7 +5,7 @@ authors:
 approvers:
   
 creation-date: 2021-11-03
-last-updated: 2021-11-11
+last-updated: 2021-11-18
 status: implementable
 ---
 # Nodes Grouping Management
@@ -186,6 +186,40 @@ type StaticClusterWeight struct {
 
 
 #### Enable scheduler-extender
+
+`/etc/kubernetes/manifests/kube-scheduler.yaml`
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  ...
+spec:
+  containers:
+  - command:
+    ...
+    - --config=/etc/kubernetes/scheduler-extender.yaml
+    ...
+```
+
+`/etc/kubernetes/scheduler-extender.yaml`
+
+```yaml
+apiVersion: kubescheduler.config.k8s.io/v1beta1
+kind: KubeSchedulerConfiguration
+clientConnection:
+  kubeconfig: /etc/kubernetes/scheduler.conf
+extenders:
+- urlPrefix: "http://127.0.0.1:12345/api/group-scheduler"
+  filterVerb: "filter"
+  preemptVerb: "preempt"
+  prioritizeVerb: "prioritize"
+  weight: 100
+  bindVerb: "bind"
+  enableHTTPS: false
+  nodeCacheCapable: false
+  ignorable: true
+```
 
 
 
