@@ -5,31 +5,10 @@ authors:
 approvers:
   
 creation-date: 2021-11-03
-last-updated: 2021-11-18
+last-updated: 2022-01-18
 status: implementable
 ---
 # Nodes Grouping Management
-
-- [Nodes Grouping Management](#nodes-grouping-management)
-	- [Motivation](#motivation)
-		- [Goals](#goals)
-		- [Non-goals](#non-goals)
-	- [Proposal](#proposal)
-		- [Use Cases](#use-cases)
-	- [Design Details](#design-details)
-		- [Architecture Diagram](#architecture-diagram)
-		- [Scheduler](#scheduler)
-			- [Filter](#filter)
-			- [Score](#score)
-		- [Controller](#controller)
-			- [Reconcile](#reconcile)
-		- [New Cluster API](#new-cluster-api)
-		- [New PropagationPolicy API](#new-propagationpolicy-api)
-		- [Example](#example)
-			- [Enable scheduler-extender](#enable-scheduler-extender)
-			- [Deploy Application with policy](#deploy-application-with-policy)
-			- [Deployment result](#deployment-result)
-		- [Test Plan](#test-plan)
 
 ## Motivation
 In edge computing scenarios, nodes are geographically distributed. The same application may be deployed on nodes in different regions.
@@ -44,69 +23,73 @@ However, with the increasing geographical distribution, operation and maintenanc
 * Pods can be deployed to multiple groups of nodes with a single Deployment.
 * The number of pod replicas required for each node group is specified in the relative policy.
 * Support pod rescheduling when the relative policy has been changed.
-* Extend kube-scheduler with scheduler-extender to avoid recompilation.
 
 ### Non-goals
-* Copy everything from karmada
+* Copy everything from Karmada
 
 ## Proposal
 ### Use Cases
-* Define a Cluster CR to indicate which nodes belong to the cluster.
-* Define a Policy CR that specifies which cluster the pods should be deployed in and how many pods need to be deployed in this cluster.
+* Define a NodeGroup CR to indicate which nodes belong to the NodeGroup.
+* Define a Policy CR that specifies which NodeGroup the pods should be deployed in and how many pods need to be deployed in this NodeGroup.
 
 ## Design Details
 ### Architecture Diagram
-![image](https://i.bmp.ovh/imgs/2021/11/6785d566e09a5746.png)
-The implementation consists of two new components: Scheduler-Extender and PolicyController. The introduction of both two component is as follows.   
-Note: All of the machanisms only work on pods with the annotation key of `groupingpolicy.kubeedge.io`.
+![image](https://i.bmp.ovh/imgs/2022/01/f8b0da832d9feb6e.png)
+The implementation consists of two new components: KeScheduler and GroupManagementControllerManager. The introduction of both two component is as follows.   
 
-
-### Scheduler
-The [scheduler-extender](https://github.com/kubernetes/enhancements/tree/master/keps/sig-scheduling/1819-scheduler-extender) is a feature supported by kubernetes to extend the capability of kube-scheduler. The scheduler-extender takes the responsibilty of filtering out the irrelevant nodes and scoring each condidate node according to the relative policy, so that pods can finally be scheduled to the appropriate cluster.  
+### KeScheduler
+The [scheduler-plugin](https://github.com/kubernetes-sigs/scheduler-plugins) is a feature supported by kubernetes to extend the capability of kube-scheduler. The scheduler-plugin takes the responsibilty of filtering out the irrelevant nodes and scoring each condidate node according to the relative policy, so that pods can finally be scheduled to the appropriate NodeGroup.  
 #### Filter
-After kube-scheduler running all built-in filter plugins, it will send the fitered nodes to scheduler-extender for futher filtering. The scheduler-extender will filter out nodes the pod should not be placed on according to the policy, then send all condidiate nodes back to kube-scheduler to continue the scheduling progress. The nodes that will be filtered out in scheduler-extender are as follows:  
-1. Node that is not in any cluster which the pod should be scheduled to
-2. Node that is in the cluster which has already had enough replica number of the pod
+The filter plugin will filter out nodes the pod should not be placed on according to the policy. The nodes that will be filtered out in scheduler-plugin are as follows:  
+1. Node that is not in any NodeGroup which the pod should be scheduled to
+2. Node that is in the NodeGroup which has already had enough replica number of the pod
 
 #### Score
-Scheduler-extender will give a score for each candidate node that has passed the filter, and then send its scores back to the kube-scheduler. Kube-scheduler will combine all score results(from score plugins and the scheduler-extender), and finally picks one has the highest score. The score policy of scheduler-extender is mainly based on the difference between current pod replica number and descired pod replica number in the cluster. In other words, a node will get a higher score if it's in a cluster with greater value of `DesiredPodReplicaNumber - CurrentPodReplicaNumber`.  
+The score plugins will give a score for each candidate node that has passed the filter, Kube-Scheduler will combine all score results and finally picks one has the highest score. The score policy is mainly based on the difference between current pod replica number and descired pod replica number in the NodeGroup. In other words, a node will get a higher score if it's in a NodeGroup with greater value of `DesiredPodReplicaNumber - CurrentPodReplicaNumber`.  
 > Note:  
-> The score policy of scheduler-extender is at the cluster level, which means all nodes in the same cluster will get the same score from schduler-extender. The prioritization among these nodes depends on other score plugins in kube-scheduler, such as `NodeAffinityPriority`.
+> The score policy of scheduler-plugin is at the NodeGroup level, which means all nodes in the same NodeGroup will get the same score from schduler-plugin. The prioritization among these nodes depends on other score plugins in Kube-Scheduler, such as `NodeAffinityPriority`.
 
 
 ### Controller
-PolicyController is responsible for reconciling the current replica number of distributed pods in each cluster with the desried distribution status which is defined in the policy. It will evict pods in clusters where they should not run and also evict pods in clusters when they are redundant(which means the current replica number in the cluster exceeds what the policy desires).   
-#### Reconcile
-PolicyController is continuously watching the Add/Update/Delete event of Policy and Cluster resource. When some events occur, policy controller will find the associated clusters and policies, then delete pods that are not needed or redundant.  
+NodeGroupController is responsible for reconciling the current NodeGroup Objects that collect the nodes belong to the NodeGroup according to labels. 
 
-### New Cluster API
-Cluster represents a group of nodes that has the same labels.
+PolicyController is responsible for reconciling the current replica number of distributed pods in each NodeGroup with the desried distribution status which is defined in the policy. It will evict pods in NodeGroups where they should not run and also evict pods in NodeGroups when they are redundant(which means the current replica number in the NodeGroup exceeds what the policy desires).
+#### Reconcile
+NodeGroupController is continuously watching the Add/Update/Delete event of NodeGroup and Node resource. When some events occur, NodeGroupController will update the status of the NodeGroup.
+
+PolicyController is continuously watching the Add/Update/Delete event of Policy and NodeGroup resource. When some events occur, policy controller will find the associated NodeGroups and policies, then delete pods that are not needed or redundant.  
+
+### New NodeGroup API
+NodeGroup represents a group of nodes that has the same labels.
 ```go
-// Cluster is the Schema for the clusters API
-type Cluster struct {
+// NodeGroup is the Schema for the nodegroups API
+type NodeGroup struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// Spec represents the specification of the desired behavior of member cluster.
-	Spec ClusterSpec `json:"spec"`
+	// Spec represents the specification of the desired behavior of member nodegroup.
+	// +required
+	Spec NodeGroupSpec `json:"spec"`
 
-	// Status represents the status of member cluster.
+	// Status represents the status of member nodegroup.
 	// +optional
-	Status ClusterStatus `json:"status,omitempty"`
+	Status NodeGroupStatus `json:"status,omitempty"`
 }
 
-// ClusterSpec defines the desired state of Cluster
-type ClusterSpec struct {
-	// Nodes contains names of all the nodes in the cluster.
-	Nodes []string `json:"nodes"`
+// NodeGroupSpec defines the desired state of NodeGroup
+type NodeGroupSpec struct {
+	// Nodes contains names of all the nodes in the nodegroup.
+	// +optional
+	Nodes []string `json:"nodes,omitempty"`
 
-	// MatchLabels matches the nodes that have the labels
-	MatchLabels map[string]string `json:"matchLables,omitempty"`
+	// MatchLabels match the nodes that have the labels
+	// +optional
+	MatchLabels map[string]string `json:"matchLabels,omitempty"`
 }
 
-// ClusterStatus defines the observed state of Cluster
-type ClusterStatus struct {
-	// ContainedNodes represents names of all nodes the cluster contains.
+// NodeGroupStatus defines the observed state of NodeGroup
+type NodeGroupStatus struct {
+	// ContainedNodes represents names of all nodes the nodegroup contains.
 	// +optional
 	ContainedNodes []string `json:"containedNodes,omitempty"`
 }
@@ -114,9 +97,10 @@ type ClusterStatus struct {
 
 ### New PropagationPolicy API
 
-PropagationPolicy specifies how to propagate pods to clusters.
+PropagationPolicy specifies how to propagate pods to nodegroups.
 
 ```go
+// PropagationPolicy represents the policy that propagates a group of resources to one or more nodegroups.
 type PropagationPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -126,14 +110,15 @@ type PropagationPolicy struct {
 	Spec PropagationSpec `json:"spec"`
 }
 
-type PropagationSpec struct {
+// PropagationPolicySpec represents the desired behavior of PropagationPolicy.
+type PropagationPolicySpec struct {
 	// ResourceSelectors used to select resources.
 	// +required
 	ResourceSelectors []ResourceSelector `json:"resourceSelectors"`
 
-	// Placement represents the rule for select clusters to propagate resources.
+	// Placement represents the rule for select nodegroups to propagate resources.
 	// +optional
-	Placement ClusterPreferences `json:"placement,omitempty"`
+	Placement NodeGroupPreferences `json:"placement,omitempty"`
 }
 
 // ResourceSelector the resources will be selected.
@@ -162,20 +147,20 @@ type ResourceSelector struct {
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 }
 
-// ClusterPreferences describes weight for each cluster or for each group of cluster.
-type ClusterPreferences struct {
-	// StaticWeightList defines the static cluster weight.
+// NodeGroupPreferences describes weight for each nodegroups or for each group of nodegroup.
+type NodeGroupPreferences struct {
+	// StaticWeightList defines the static nodegroup weight.
 	// +required
-	StaticWeightList []StaticClusterWeight `json:"staticWeightList"`
+	StaticWeightList []StaticNodeGroupWeight `json:"staticWeightList"`
 }
 
-// StaticClusterWeight defines the static cluster weight.
-type StaticClusterWeight struct {
-	// ClusterNames specifies clusters with names.
+// StaticNodeGroupWeight defines the static NodeGroup weight.
+type StaticNodeGroupWeight struct {
+	// NodeGroupNames specifies nodegroups with names.
 	// +required
-	ClusterNames []string `json:"clusterNames"`
+	NodeGroupNames []string `json:"nodeGroupNames"`
 
-	// Weight expressing the preference to the cluster(s) specified by 'TargetCluster'.
+	// Weight expressing the preference to the nodegroup(s) specified by 'TargetNodeGroup'.
 	// +kubebuilder:validation:Minimum=1
 	// +required
 	Weight int64 `json:"weight"`
@@ -183,45 +168,32 @@ type StaticClusterWeight struct {
 ```
 ### Example
 
-
-
-#### Enable scheduler-extender
-
-`/etc/kubernetes/manifests/kube-scheduler.yaml`
+#### Enable KeScheduler
 
 ```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  ...
-spec:
-  containers:
-  - command:
-    ...
-    - --config=/etc/kubernetes/scheduler-extender.yaml
-    ...
-```
-
-`/etc/kubernetes/scheduler-extender.yaml`
-
-```yaml
-apiVersion: kubescheduler.config.k8s.io/v1beta1
+apiVersion: kubescheduler.config.k8s.io/v1beta2
 kind: KubeSchedulerConfiguration
+leaderElection:
+  leaderElect: false
 clientConnection:
-  kubeconfig: /etc/kubernetes/scheduler.conf
-extenders:
-- urlPrefix: "http://127.0.0.1:12345/api/group-scheduler"
-  filterVerb: "filter"
-  preemptVerb: "preempt"
-  prioritizeVerb: "prioritize"
-  weight: 100
-  bindVerb: "bind"
-  enableHTTPS: false
-  nodeCacheCapable: false
-  ignorable: true
+  kubeconfig: /home/ys3/.kube/config
+profiles:
+- schedulerName: default-scheduler
+  plugins:
+    preFilter:
+      enabled:
+      - name: NodeGroupScheduling
+    filter:
+      enabled:
+      - name: NodeGroupScheduling
+    score:
+      enabled:
+      - name: NodeGroupScheduling
+  pluginConfig:
+  - name: NodeGroupScheduling
+    args:
+      kubeConfigPath: /home/ys3/.kube/config
 ```
-
-
 
 ####  Deploy Application with policy
 The deployment template
@@ -260,10 +232,10 @@ spec:
       name: nginx
   placement:
     staticWeightList:
-      - clusterNames:
+      - nodeGroupNames:
         - beijing
         weight: 2
-      - clusterNames:
+      - nodeGroupNames:
         - hangzhou
         weight: 3
 ```
@@ -274,9 +246,9 @@ spec:
 ### Test Plan
 
 - Unit Test covering:
-  - Cluster selects the corresponding nodes according to the label
-  - The nodes can be scored correctly by scheduler-extender
+  - NodeGroup selects the corresponding nodes according to the labels
+  - The pod can be scheduled correctly by KeScheduler
 
 - E2E Test covering:
-  - Deploy scheduler-extenders in kubeedge cluster
-  - Deploy pods to different clusters in kubeedge cluster
+  - Deploy KeScheduler and GroupManagerControllerManager in Kubeedge cluster
+  - Deploy pods to different NodeGroups in Kubeedge cluster
