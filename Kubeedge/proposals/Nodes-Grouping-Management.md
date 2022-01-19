@@ -11,6 +11,7 @@ status: implementable
 # Nodes Grouping Management
 
 - [Nodes Grouping Management](#nodes-grouping-management)
+	- [Summary](#summary)
 	- [Motivation](#motivation)
 		- [Goals](#goals)
 		- [Non-goals](#non-goals)
@@ -30,6 +31,10 @@ status: implementable
 			- [Deploy Application with policy](#deploy-application-with-policy)
 			- [Deployment result](#deployment-result)
 		- [Test Plan](#test-plan)
+
+## Summary
+In some scenarios, we may want to deploy an application across serval specified locations. In this case, the typical pratice is to write a deployment for each location, which means we have to manage serval deployments for one application. As the growing number of applications and their required locations, it will be too difficult to manage.  
+The nodes grouping management feature will help users to divied nodes into groups, and also provide a way to control how to spread pods among groups.
 
 ## Motivation
 In edge computing scenarios, nodes are geographically distributed. The same application may be deployed on nodes in different regions.
@@ -57,7 +62,8 @@ However, with the increasing geographical distribution, operation and maintenanc
 ## Design Details
 ### Architecture Diagram
 ![image](https://i.bmp.ovh/imgs/2021/11/6785d566e09a5746.png)
-The implementation consists of two new components: Scheduler-Extender and PolicyController. The introduction of both two component is as follows.   
+The implementation consists of two new components: Scheduler-Extender and PolicyController. When user applies a deployment, kubernetes will automatically create replica pods for it. The kube-scheduler takes the responsibility of scheduling pods to nodes. User can specified how to spread the replica node with PropagationPolicy. In the diagram, the policy is defined to spread pods to nodes at HangZhou and Beijing with rate 2:3. Kube-Scheduler will ask scheduler-extender for how to schedule.
+The introduction of both two component is as follows.   
 Note: All of the machanisms only work on pods with the annotation key of `groupingpolicy.kubeedge.io`.
 
 
