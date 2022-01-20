@@ -6,7 +6,7 @@ authors:
 approvers:
   
 creation-date: 2021-11-03
-last-updated: 2022-01-19
+last-updated: 2022-01-20
 status: implementable
 ---
 # Node Group Management
@@ -61,8 +61,8 @@ However, with the number of locations increasing, operation and maintenance of a
 * Define a PropagationPolicy CR that specifies which nodegroup pods should be scheduled to and how many pods should run in this nodegroup.
 
 ## Design Details
-### Architecture Diagram
-![image](https://i.bmp.ovh/imgs/2021/11/6785d566e09a5746.png)  
+### Architecture
+![image](https://i.bmp.ovh/imgs/2022/01/b4ff2a7749cdae29.png)
 
 The implementation consists of two new components: `GroupSchedulingExtender` and `GroupManagementControllerManager`. When users apply a deployment, kubernetes will automatically create pods for it. The `kube-scheduler` takes the responsibility of scheduling pods to nodes. Users can specify how do these pods spread among different locations with `PropagationPolicy`. In this example, the policy defines that pods should spread among Beijing and Hangzhou with rate 2:3. The `kube-scheduler` will ask `GroupSchedulingExtender` for how to schedule pods, and the `GroupSchedulingExtender` will make the decision according to the policy. During runtime, `GroupManagementControllerManager` will continuously watch policies and nodegroups, and do the neccessary work to reconcile the current condition with the condition what defined in the policy. In this example, the `GroupManagementControllerManager` deletes one pod running in the Beijing NodeGroup to make this pod rescheduled. Then a new pod will be created and be scheduled to the Hangzhou NodeGroup by the `kube-scheduler` and the `GroupSchedulingExtender` to make pod number rate of Beijing:Hangzhou as 2:3. 
 
