@@ -72,7 +72,7 @@ However, with the number of locations increasing, operation and maintenance of a
 
 ## Design Details
 ### Architecture
-![image](https://i.bmp.ovh/imgs/2022/01/b4ff2a7749cdae29.png)  
+![image](https://i.bmp.ovh/imgs/2022/02/5e755e02ff1601bd.png)  
 
 The implementation consists of two new components: `GroupSchedulingExtender` and `GroupManagementControllerManager`. When users apply a deployment, kubernetes will automatically create pods for it. The `kube-scheduler` takes the responsibility of scheduling pods to nodes. Users can specify how do these pods spread among different locations with `PropagationPolicy`.  The `kube-scheduler` will ask `GroupSchedulingExtender` for how to schedule pods, and the `GroupSchedulingExtender` will make the decision according to the policy. During runtime, `GroupManagementControllerManager` will be continuously watching policies(including PropagationPolicy and OverridePolicy), nodegroups and apps(such as deployment), and do the neccessary work to reconcile the current condition with the condition what defined in policies. In this example, the `GroupManagementControllerManager` deletes one pod running in the Beijing NodeGroup to make this pod rescheduled. Then a new pod will be created and be scheduled to the Hangzhou NodeGroup by the `kube-scheduler` and the `GroupSchedulingExtender` to make pod number rate of Beijing:Hangzhou as defined in PropagationPolicy. Also, it will respect the `OverridePolicy` and check pods running in nodegroups is actually the edition they need. It is a typical scenario where the nodegroup wants to use its local image registry. Then can set the image field as `hangzhou.registry.io` for pods in hangzhou nodegroup and `beijing.registry.io` for pods in beijing nodegroup.
 
