@@ -39,13 +39,13 @@ status: implementable
 		- [Test Plan](#test-plan)
 
 ## Summary
-In some scenarios, we may want to deploy an application among serval locations. In this case, the typical pratice is to write a deployment for each location, which means we have to manage serval deployments for one application. As the number of applications and their required locations continously increasing, it will be more and more complicated to manage.  
+In some scenarios, we may want to deploy an application among several locations. In this case, the typical practice is to write a deployment for each location, which means we have to manage several deployments for one application. With the number of applications and their required locations continuously increasing, it will be more and more complicated to manage.  
 The node group management feature will help users to manage nodes in groups, and also provide a way to control how to spread pods among node groups and how to run different editions of pod instances in different node groups.
 
 ## Motivation
 In edge computing scenarios, nodes are geographically distributed. The same application may be deployed on nodes at different locations.
 
-Taking Deployment as an example, the traditional practice is to set the same label for edge nodes in the same location, and then create Deployment per location. Different deployments will deploy application in the location specified by its NodeSelector.
+Taking Deployment as an example, the traditional practice is to set the same label for edge nodes in the same location, and then create Deployment per location. Different deployments will deploy applications at different locations specified by their NodeSelector.
 
 ![image](https://camo.githubusercontent.com/f128002038cd1f1cae5e742c3cb1fa558610e9499527066f83aaffbe2b64bfbd/68747470733a2f2f692e626d702e6f76682f696d67732f323032312f30392f306234666234393264663930623335612e706e67)
 
@@ -54,13 +54,13 @@ However, with the number of locations increasing, operation and maintenance of a
 ### Goals
 * Support all application resources based on pod API automatically.
 * Pods can be deployed to nodes at multiple locations with a single Deployment.
-* The number of pod and the difference of pod instance required for each node group is specified in the relative policy.
+* The number of pods and the differences of pod instances required bu each node group can be specified in relative policies.
 * Support pod rescheduling/restarting when the relative policy has been changed.
 * Extend kube-scheduler with scheduler-extender to avoid recompilation.
 
 ### Non-goals
 * Introduce new CRD for each application resource. 
-* Split one deployment into serval deployments for all locations.
+* Split one deployment into several deployments for all locations.
 * Replace the native kube-scheduler.
 * Impose influence on all of the running pod instances.
 
@@ -74,9 +74,9 @@ However, with the number of locations increasing, operation and maintenance of a
 ### Architecture
 ![image](https://i.bmp.ovh/imgs/2022/02/5e755e02ff1601bd.png)  
 
-The implementation consists of two new components: `GroupSchedulingExtender` and `GroupManagementControllerManager`. When users apply a deployment, kubernetes will automatically create pods for it. The `kube-scheduler` takes the responsibility of scheduling pods to nodes. Users can specify how do these pods spread among different locations with `PropagationPolicy`.  The `kube-scheduler` will ask `GroupSchedulingExtender` for how to schedule pods, and the `GroupSchedulingExtender` will make the decision according to the policy. During runtime, `GroupManagementControllerManager` will be continuously watching policies(including PropagationPolicy and OverridePolicy), nodegroups and apps(such as deployment), and do the neccessary work to reconcile the current condition with the condition what defined in policies. In this example, the `GroupManagementControllerManager` deletes one pod running in the Beijing NodeGroup to make this pod rescheduled. Then a new pod will be created and be scheduled to the Hangzhou NodeGroup by the `kube-scheduler` and the `GroupSchedulingExtender` to make pod number rate of Beijing:Hangzhou as defined in PropagationPolicy. Also, it will respect the `OverridePolicy` and check pods running in nodegroups is actually the edition they need. It is a typical scenario where the nodegroup wants to use its local image registry. Then can set the image field as `hangzhou.registry.io` for pods in hangzhou nodegroup and `beijing.registry.io` for pods in beijing nodegroup.
+The implementation consists of two new components: `GroupSchedulingExtender` and `GroupManagementControllerManager`. When users apply a deployment, kubernetes will automatically create pods for it. The `kube-scheduler` takes the responsibility of scheduling pods to nodes. Users can specify how these pods spread among different locations with `PropagationPolicy`.  The `kube-scheduler` will ask `GroupSchedulingExtender` for how to schedule pods, and the `GroupSchedulingExtender` will make the decision according to the policy. During runtime, `GroupManagementControllerManager` will be continuously watching policies(including PropagationPolicy and OverridePolicy), nodegroups and apps(such as deployment), and do the necessary work to reconcile the current condition with the condition what defined in policies. In this example, the `GroupManagementControllerManager` deletes one pod running in the Beijing NodeGroup to make this pod rescheduled. Then a new pod will be created and be scheduled to the Hangzhou NodeGroup by the `kube-scheduler` and the `GroupSchedulingExtender` to make the pod number as defined in PropagationPolicy. Also, it will respect the `OverridePolicy` and check pods running in nodegroups are actually the editions they need. It is a typical scenario where the nodegroup wants to use its local image registry. Then can set the image field as `hangzhou.registry.io` for pods in hangzhou nodegroup and `beijing.registry.io` for pods in beijing nodegroup.
 
-In the view of applications, deployment in this case, they should specify which PropagationPolicy and OverridePolicy to use through labels. The `GroupSchedulingExtender` will refer to the `PropoagationPolicy` during scheduling progress, and the `cloudcore`, a native compenent of KubeEdge, will refer to the `OverridePolicy` when sending pods to the relative edge nodes.
+In the view of applications, deployment in this case, they should specify which `PropagationPolicy` and OverridePolicy to use through labels. The `GroupSchedulingExtender` will refer to the `PropoagationPolicy` during scheduling progress, and the `cloudcore`, a native component of KubeEdge, will refer to the `OverridePolicy` when sending pods to the relative edge nodes.
 
 ### Introduced Labels
 New labels with following keys are introduced:
@@ -92,7 +92,7 @@ First two, called required labels, are used for applications to specify which Pr
 A new ConfiMap is introduced, called `groupmanagement-config`. It contains information needed by `GroupMangementControllerManager`, including the GVK of appication API if it's CRD, the PodTemplate field path of application API.
 
 ### GroupSchedulingExtender
-`GroupSchedulingExtender` is implemented based on [scheduler-extender](https://github.com/kubernetes/enhancements/tree/master/keps/sig-scheduling/1819-scheduler-extender) which is a feature supported by kubernetes to extend the capability of `kube-scheduler`. `GroupSchedulingExtender` takes the responsibilty of filtering out the irrelevant nodes and scoring each condidate node according to the relative policy, so that pods can finally be scheduled to the appropriate nodegroup.  
+`GroupSchedulingExtender` is implemented based on [scheduler-extender](https://github.com/kubernetes/enhancements/tree/master/keps/sig-scheduling/1819-scheduler-extender) which is a feature supported by kubernetes to extend the capability of `kube-scheduler`. `GroupSchedulingExtender` takes the responsibility of filtering out the irrelevant nodes and scoring each candidate node according to the relative policy, so that pods can finally be scheduled to the appropriate nodegroup.  
 
 `GroupSchedulingExtender` only cares about propagationpolicy labels. When a pod comes to it, we can find the app it belongs to(through OwnerReference). There are 4 possible situations:
 
@@ -103,10 +103,10 @@ A new ConfiMap is introduced, called `groupmanagement-config`. It contains infor
 
 For 1 and 2, `GroupSchedulingExtender` will not schedule this pod and make it in pending status.  
 For 3, `GroupSchedulingExtender` will schedule this pod according to the binding PropagationPolicy.  
-For 4, `GroupSchedulingExtender` won't do anything. This pod will be scheduled by native `kube-scehduler`.   
+For 4, `GroupSchedulingExtender` won't do anything. This pod will be scheduled by native `kube-scheduler`.   
 
 #### Filter
-After `kube-scheduler` running all built-in filter plugins, it will send the filtered nodes to `GroupSchedulingExtender` for further filtering. `GroupSchedulingExtender` will filtered out nodes which the pod should not be placed on according to the policy, then send all condidiate nodes back to `kube-scheduler` and continue the scheduling progress. Nodes that will be filtered out in `GroupSchedulingExtender` are as follows:  
+After `kube-scheduler` runs all built-in filter plugins, it will send the filtered nodes to `GroupSchedulingExtender` for further filtering. `GroupSchedulingExtender` will filter out nodes which the pod should not be placed on according to the policy, then send all candidate nodes back to `kube-scheduler` and continue the scheduling progress. Nodes that will be filtered out in `GroupSchedulingExtender` are as follows:  
 1. Node that is not in any nodegroup which the pod should be scheduled to
 2. Node that is in the nodegroup which has already had enough replica number of the pod
 
@@ -124,15 +124,15 @@ After `kube-scheduler` running all built-in filter plugins, it will send the fil
 #### PropagationPolicyController
 `PropagationPolicyController` is responsible for reconciling the current replica number of pods in each nodegroup with the desired distribution status which is defined in the PropagationPolicy. It will evict pods in nodegroups where they should not run and also evict pods in nodegroups when they are redundant(which means the current replica number of pods in the nodegroup exceeds what the policy desires). 
 
-`PropagationPolicyController` should watch configmap `groupmanagement-config`. It will dynamically add/delete informers according to the GVK set in the config. These informers will react to the modification of labels. If it find `groupmanagement.kubeedge.io/required-propagationpolicy`, it will check if the propagation policy actually exists and add binding label for it. Here, we leave extension space before adding binding label. It will also watch PropogationPolicy and NodeGroup resources and do the reconciliation.
+`PropagationPolicyController` should watch configmap `groupmanagement-config`. It will dynamically add/delete informers according to the GVK set in the config. These informers will react to the modification of labels. If it find `groupmanagement.kubeedge.io/required-propagationpolicy`, it will check if the propagation policy actually exists and add binding label for it. Here, we leave extension space before adding binding label. It will also watch PropagationPolicy and NodeGroup resources and do the reconciliation.
 
 #### OverridePolicyController
 `OverridePolicyController` is responsible for reconciling the current pod instance edition in each nodegroup with desired pod instance edition which is defined in the OverridePolicy. If inconsistent, it will modify relative paths of pods at APIServer, and then pods will automatically restart. 
 
-`OverridePolicyController` should watch configmap `groupmanagement-config`. It will dynamically add/delete informers according to the GVK set in the config. These informers will react to the modification of labels. If it find `groupmanagement.kubeedge.io/required-overridepolicy`, it will check if the override policy actually exists and add binding label for it. Here, we leave extension space before adding binding label. Currently, we can apply the required override policy for this pod. It will also watch OverridePolicy and NodeGroup resources and do the reconciliation.
+`OverridePolicyController` should watch configmap `groupmanagement-config`. It will dynamically add/delete informers according to the GVK set in the config. These informers will react to the modification of labels. If it find `groupmanagement.kubeedge.io/required-overridepolicy`, it will check if the override policy actually exists and add binding label for it. Here, we leave extension space before adding binding label. Currently, we can apply the required override policy for this pod during this period. It will also watch OverridePolicy and NodeGroup resources and do the reconciliation.
 
 ### Filter Function of CloudCore
-We respect the design of `CloudCore` and keep it as an communication component. `CloudCore` only needs check the label and decides whether to send it to edge nodes. There are 4 possible situations:
+We respect the design of `CloudCore` and keep it as a communication component. `CloudCore` only needs to check the label and decides whether to send it to edge nodes. There are 4 possible situations:
 
 1. having required label, no binding label
 2. having required label and binding label, but their values are different
@@ -143,7 +143,7 @@ For 1 and 2, cloudcore should not send these pods to edge nodes.
 For 3 and 4, cloudcore should send these pods to edge nodes.
 
 ### NodeGroup API
-NodeGroup represents a group of nodes that has the same labels.
+NodeGroup represents a group of nodes that have the same labels.
 ```go
 // NodeGroup is the Schema for the nodegroups API
 type NodeGroup struct {
@@ -477,7 +477,7 @@ Then, add labels
 `groupmanagement.kubeedge.io/required-propagationpolicy: nginx-propagationpolicy`  
 `groupmanagement.kubeedge.io/required-overridepolicy: nginx-overridepolicy` 
 
-to the deployment. Actually, the operation order doesn't matter. You can add labels first and then submit policies as well. In either way, we will get what we want.
+to the deployment. Actually, the operation order doesn't matter. You can add labels first and then apply policies as well. In either way, we will get what we want.
 
 ## Plan
 ### Develop Plan
@@ -487,13 +487,14 @@ to the deployment. Actually, the operation order doesn't matter. You can add lab
   - [ ] Support ImageOverrider, ArgsOverrider and CommandOverrider
 - beta
   - [ ] Support Statefulset, DaemonSet, Job
-  - [ ] Support CRD application
   - [ ] Support PlaintextOverrider
   - [ ] Support StaticWeight PropagationStrategy
+- v1
+  - [ ] Support CRD application
 ### Test Plan
 - Unit Test covering:
   - [ ] `GroupSchedulingExtender` can filter out nodes which the pod should not be scheduled to.
-  - [ ] `GroupSchedulingExtender` can give a suitable score for each candicate node.
+  - [ ] `GroupSchedulingExtender` can give a suitable score for each candidate node.
 
 - E2E Test covering:
   - [ ] Deploy scheduler-extenders in kubeedge cluster.
