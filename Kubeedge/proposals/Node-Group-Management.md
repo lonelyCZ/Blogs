@@ -3,40 +3,32 @@ title: Node Group Management
 authors: 
   - "@Congrool"
   - "@lonelyCZ"
+  - "@vincentgoat"
 approvers:
   
 creation-date: 2021-11-03
-last-updated: 2022-02-08
+last-updated: 2022-03-04
 status: implementable
 ---
 # Node Group Management
 
 - [Node Group Management](#node-group-management)
-	- [Summary](#summary)
-	- [Motivation](#motivation)
-		- [Goals](#goals)
-		- [Non-goals](#non-goals)
-	- [Proposal](#proposal)
-		- [Use Cases](#use-cases)
-	- [Design Details](#design-details)
-		- [Architecture](#architecture)
-		- [Introduced Labels](#introduced-labels)
-		- [Introduced ConfigMap](#introduced-configmap)
-		- [GroupSchedulingExtender](#groupschedulingextender)
-			- [Filter](#filter)
-			- [Score](#score)
-		- [GroupManagementControllerManager](#groupmanagementcontrollermanager)
-			- [NodeGroupController](#nodegroupcontroller)
-			- [PropagationPolicyController](#propagationpolicycontroller)
-			- [OverridePolicyController](#overridepolicycontroller)
-		- [Filter Function of CloudCore](#filter-function-of-cloudcore)
-		- [NodeGroup API](#nodegroup-api)
-		- [PropagationPolicy API](#propagationpolicy-api)
-		- [OverridePolicy API](#overridepolicy-api)
-		- [Example](#example)
-	- [Plan](#plan)
-		- [Develop Plan](#develop-plan)
-		- [Test Plan](#test-plan)
+  - [Summary](#summary)
+  - [Motivation](#motivation)
+    - [Goals](#goals)
+    - [Non-goals](#non-goals)
+  - [Design Details](#design-details)
+    - [Architecture](#architecture)
+    - [GroupManagementControllerManager](#groupmanagementcontrollermanager)
+      - [NodeGroupController](#nodegroupcontroller)
+      - [EdgeApplicationController](#edgeapplicationcontroller)
+    - [EndpointSlice Filter in CloudCore](#endpointslice-filter-in-cloudcore)
+    - [NodeGroup API](#nodegroup-api)
+    - [EdgeApplication API](#edgeapplication-api)
+  - [Use Cases](#use-cases)
+    - [Example](#example)
+  - [Plan](#plan)
+    - [Develop Plan](#develop-plan)
 
 ## Summary
 In some scenarios, we may want to deploy an application among several locations. In this case, the typical practice is to write a deployment for each location, which means we have to manage several deployments for one application. With the number of applications and their required locations continuously increasing, it will be more and more complicated to manage.  
@@ -52,95 +44,39 @@ Taking Deployment as an example, the traditional practice is to set the same lab
 However, with the number of locations increasing, operation and maintenance of applications become more and more complex. 
 
 ### Goals
-* Support all application resources based on pod API automatically.
-* Pods can be deployed to nodes at multiple locations with a single Deployment.
-* The number of pods and the differences of pod instances required bu each node group can be specified in relative policies.
-* Support pod rescheduling/restarting when the relative policy has been changed.
-* Extend kube-scheduler with scheduler-extender to avoid recompilation.
+* Use a single resource to manage an application deployed at different locations.
+* Users can specify the number of pods and the differences of pod instances running in each node group.
+* Non-intrusive for kubernetes native control plane
+* Limit service endpoints in the same location as the client pod.
 
 ### Non-goals
-* Introduce new CRD for each application resource. 
-* Split one deployment into several deployments for all locations.
-* Replace the native kube-scheduler.
-* Impose influence on all of the running pod instances.
-
-## Proposal
-### Use Cases
-* Define a NodeGroup CR to indicate which nodes belong to the nodegroup.
-* Define a PropagationPolicy CR that specifies which nodegroup pods should be scheduled to and how many pods should run in this nodegroup.
-* Define a OverridePolicy CR that specifies the differences of pod instances in different node groups.
+* Create another systematic machanism to take over the work of application lifetime management, such as rolling update which is the responsibility of deployment.
+* Create a new CRD for each kind of application.
 
 ## Design Details
 ### Architecture
-![image](https://i.bmp.ovh/imgs/2022/02/5e755e02ff1601bd.png)  
+![image](./GroupManagementArch.png)
 
-The implementation consists of two new components: `GroupSchedulingExtender` and `GroupManagementControllerManager`. When users apply a deployment, kubernetes will automatically create pods for it. The `kube-scheduler` takes the responsibility of scheduling pods to nodes. Users can specify how these pods spread among different locations with `PropagationPolicy`.  The `kube-scheduler` will ask `GroupSchedulingExtender` for how to schedule pods, and the `GroupSchedulingExtender` will make the decision according to the policy. During runtime, `GroupManagementControllerManager` will be continuously watching policies(including PropagationPolicy and OverridePolicy), nodegroups and apps(such as deployment), and do the necessary work to reconcile the current condition with the condition what defined in policies. In this example, the `GroupManagementControllerManager` deletes one pod running in the Beijing NodeGroup to make this pod rescheduled. Then a new pod will be created and be scheduled to the Hangzhou NodeGroup by the `kube-scheduler` and the `GroupSchedulingExtender` to make the pod number as defined in PropagationPolicy. Also, it will respect the `OverridePolicy` and check pods running in nodegroups are actually the editions they need. It is a typical scenario where the nodegroup wants to use its local image registry. Then can set the image field as `hangzhou.registry.io` for pods in hangzhou nodegroup and `beijing.registry.io` for pods in beijing nodegroup.
+The implementation consists of two components. a new `GroupManagementControllerManager` and the endpointslice filter in the `cloudcore`. The `GroupManagementControllerManager` contains controllers of new CRDs, including `NodeGroupController` and `EdgeApplicationController`. The endpointslice filter is used to filter endpoints in endpointslices before sending them to the edgecore so as to make edgecore only aware of the endpoints in the same node group.
 
-In the view of applications, deployment in this case, they should specify which `PropagationPolicy` and OverridePolicy to use through labels. The `GroupSchedulingExtender` will refer to the `PropoagationPolicy` during scheduling progress, and the `cloudcore`, a native component of KubeEdge, will refer to the `OverridePolicy` when sending pods to the relative edge nodes.
+NodeGroup will organize nodes according to their labels which should be set based on their locations in advance, `location: hangzhou` and `location: beijing` in this case. After applying the NodeGroup resource, nodes will be grouped in `hangzhou` and `beijing` logically.
 
-### Introduced Labels
-New labels with following keys are introduced:
-
-`groupmanagement.kubeedge.io/required-propagationpolicy`  
-`groupmanagement.kubeedge.io/required-overridepolicy`  
-`groupmanagement.kubeedge.io/binding-propagationpolicy`  
-`groupmanagement.kubeedge.io/binding-overridepolicy`
-
-First two, called required labels, are used for applications to specify which PropagationPolicy and OverridePolicy it wants to use. Later two, called binding labels, will be added by controllers if they think it's ok.
-
-### Introduced ConfigMap
-A new ConfiMap is introduced, called `groupmanagement-config`. It contains information needed by `GroupMangementControllerManager`, including the GVK of appication API if it's CRD, the PodTemplate field path of application API.
-
-### GroupSchedulingExtender
-`GroupSchedulingExtender` is implemented based on [scheduler-extender](https://github.com/kubernetes/enhancements/tree/master/keps/sig-scheduling/1819-scheduler-extender) which is a feature supported by kubernetes to extend the capability of `kube-scheduler`. `GroupSchedulingExtender` takes the responsibility of filtering out the irrelevant nodes and scoring each candidate node according to the relative policy, so that pods can finally be scheduled to the appropriate nodegroup.  
-
-`GroupSchedulingExtender` only cares about propagationpolicy labels. When a pod comes to it, we can find the app it belongs to(through OwnerReference). There are 4 possible situations:
-
-1. having required label, no binding label
-2. having required label and binding label, but their values are different
-3. having required label and binding label, and their values are same
-4. having neither required label and binding label
-
-For 1 and 2, `GroupSchedulingExtender` will not schedule this pod and make it in pending status.  
-For 3, `GroupSchedulingExtender` will schedule this pod according to the binding PropagationPolicy.  
-For 4, `GroupSchedulingExtender` won't do anything. This pod will be scheduled by native `kube-scheduler`.   
-
-#### Filter
-After `kube-scheduler` runs all built-in filter plugins, it will send the filtered nodes to `GroupSchedulingExtender` for further filtering. `GroupSchedulingExtender` will filter out nodes which the pod should not be placed on according to the policy, then send all candidate nodes back to `kube-scheduler` and continue the scheduling progress. Nodes that will be filtered out in `GroupSchedulingExtender` are as follows:  
-1. Node that is not in any nodegroup which the pod should be scheduled to
-2. Node that is in the nodegroup which has already had enough replica number of the pod
-
-#### Score
-`GroupSchedulingExtender` will give a score for each candidate node that has passed the filter, and then send the scores back to the `kube-scheduler`. `kube-scheduler` will combine all scores(from built-in score plugins and the `GroupSchedulingExtender`), and finally pick one which has the highest score. The score method of `GroupSchedulingExtender` is mainly based on the difference between current pod replica number and desired pod replica number. In other words, a node will get a higher score if it's in a nodegroup with greater value of `DesiredPodReplicaNumber - CurrentPodReplicaNumber`.  
-> Note:  
-> The score method of `GroupSchedulingExtender` is at the nodegroup level, which means all nodes in the same nodegroup will get the same score from `GroupSchedulingExtender`. The prioritization among these nodes depends on other score plugins in `kube-scheduler`, such as `NodeAffinityPriority`.
+The EdgeApplication resource contains the template of the application to deploy.Through EdgeApplication API, users can apply the different editions of the application template for each node group, such as specifying the image registry for each node group. After applying the EdgeApplication resource, the EdgeApplication controller will take the application template and override it generating serval different editions according to the specification. And then these applications will run in their nodegroups repectively.
 
 ### GroupManagementControllerManager 
-`GroupManagementControllerManager` contains three controllers, called `NodeGroupController`, `PropagationPolicyController` and `OverridePolicyController`.
+`GroupManagementControllerManager` contains two controllers, called `NodeGroupController`, and `EdgeApplicationController`, which take over the lifetime mangement of EdgeApplication and NodeGroup respectively.
 
 #### NodeGroupController
-`NodeGroupController` is responsible for reconciling the NodeGroup Object which will collect nodes belonging to the NodeGroup according to node names and labels and fill the status field. `NodeGroupController` only watches the nodegroup API.
+`NodeGroupController` is responsible for collecting nodes belonging to the NodeGroup according to node names or labels and filling the status field. `NodeGroupController` watches the nodegroup resource and node resource. When nodes are added, deleted or their labels are updated, it will add/remove these nodes in/from the relative node groups.
 
-#### PropagationPolicyController
-`PropagationPolicyController` is responsible for reconciling the current replica number of pods in each nodegroup with the desired distribution status which is defined in the PropagationPolicy. It will evict pods in nodegroups where they should not run and also evict pods in nodegroups when they are redundant(which means the current replica number of pods in the nodegroup exceeds what the policy desires). 
+#### EdgeApplicationController
+`EdgeApplicationController` is responsible for creating, updating and deleting the subresources manifested in the EdgeApplication.
+1. When EdgeApplication has been created, it will create and override the subresource for each specified node group.
+2. When EdgeApplication has been updated, it will update relative  fields of subresources.
+3. When EdgeApplication has been deleted, it will delete all manifested subresources.  
 
-`PropagationPolicyController` should watch configmap `groupmanagement-config`. It will dynamically add/delete informers according to the GVK set in the config. These informers will react to the modification of labels. If it find `groupmanagement.kubeedge.io/required-propagationpolicy`, it will check if the propagation policy actually exists and add binding label for it. Here, we leave extension space before adding binding label. It will also watch PropagationPolicy and NodeGroup resources and do the reconciliation.
-
-#### OverridePolicyController
-`OverridePolicyController` is responsible for reconciling the current pod instance edition in each nodegroup with desired pod instance edition which is defined in the OverridePolicy. If inconsistent, it will modify relative paths of pods at APIServer, and then pods will automatically restart. 
-
-`OverridePolicyController` should watch configmap `groupmanagement-config`. It will dynamically add/delete informers according to the GVK set in the config. These informers will react to the modification of labels. If it find `groupmanagement.kubeedge.io/required-overridepolicy`, it will check if the override policy actually exists and add binding label for it. Here, we leave extension space before adding binding label. Currently, we can apply the required override policy for this pod during this period. It will also watch OverridePolicy and NodeGroup resources and do the reconciliation.
-
-### Filter Function of CloudCore
-We respect the design of `CloudCore` and keep it as a communication component. `CloudCore` only needs to check the label and decides whether to send it to edge nodes. There are 4 possible situations:
-
-1. having required label, no binding label
-2. having required label and binding label, but their values are different
-3. having required label and binding label, and their values are same
-4. having neither required label and binding label
-
-For 1 and 2, cloudcore should not send these pods to edge nodes.  
-For 3 and 4, cloudcore should send these pods to edge nodes.
+### EndpointSlice Filter in CloudCore
+The endpointslice filter in cloudcore takes the responsibility of filtering out endpoints in the endpointslice before sending them to the edge. Clients, possibly kube-proxy, at edge which ask for the endpointslice from the cloudcore will only get endpointslice containing endpoints in their node groups. Thus, the pod, for example running in the node group A, can only reach endpoints in node group A.
 
 ### NodeGroup API
 NodeGroup represents a group of nodes that have the same labels.
@@ -178,97 +114,62 @@ type NodeGroupStatus struct {
 }
 ```
 
-### PropagationPolicy API
-
-PropagationPolicy specifies how to propagate pods to nodegroups.
+### EdgeApplication API
+EdgeApplication contains the template of the application orgainzed by node groups. It also contains the information of how to deploy different editions of the application to different node groups.
 
 ```go
-// PropagationPolicy represents the policy that propagates a group of resources to one or more nodegroups.
-type PropagationPolicy struct {
+// EdgeApplication defines a list of resources to be deployed on the node groups.
+type EdgeApplication struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// Spec represents the desired behavior of PropagationPolicy.
-	// +required
-	Spec PropagationSpec `json:"spec"`
-}
+	// Spec represents the desired behavior of EdgeApplication.
+	Spec EdgeAppSpec `json:"spec"`
 
-type PropagationStrategy string
-
-const (
-	StaticWeightPropagationStrategy PropagationStrategy = "StaticWeight"
-	NumRangePropagationStrategy     PropagationStrategy = "NumRange"
-)
-
-// PropagationPolicySpec represents the desired behavior of PropagationPolicy.
-type PropagationPolicySpec struct {
-	// PropagationStrategy defines how to propagate pod instances among nodegroups.
-	// It can be either "StaticWeight" or "NumRange". Only the relative field will be used.
-	// For example:
-	// If set PropagationStrategy as "StaticWeight", the StaticWeight field will be used and
-	// other fields will be ignored.
+	// Status represents the status of PropagationStatus.
 	// +optional
-	PropagationStrategy PropagationStrategy `json:"propagationStrategy"`
+	Status EdgeAppStatus `json:"status,omitempty"`
+}
 
-	// StaticWeightList defines the static nodegroup weight.
+// EdgeAppSpec defines the desired state of EdgeApplication.
+type EdgeAppSpec struct {
+	// ResourceTemplate represents the manifest workload to be deployed on managed node groups.
+	ResourceTemplate ResourceTemplate `json:"resourceTemplate,omitempty"`
+	// WorkloadScopes represents the scope of workload to be deployed.
+	WorkloadScopes WorkloadScope `json:"workloadScopes"`
+}
+
+// WorkloadScope represents the scope of workload to be deployed.
+type WorkloadScope struct {
+	// TargetNodeGroups represents the target node groups of workload to be deployed.
 	// +optional
-	StaticWeight []StaticNodeGroupWeight `json:"staticWeightList"`
-
-	// NumRange defines the pod number range of each nodegroup.
-	// +optional 
-	NumRange []SpreadConstraint `json:"numRange"`
-}
-
-// NodeGroupPreferences describes weight for each nodegroups or for each group of nodegroup.
-type NodeGroupPreferences struct {
-	// StaticWeightList defines the static nodegroup weight.
-	// +required
-	StaticWeightList []StaticNodeGroupWeight `json:"staticWeightList"`
-}
-
-// StaticNodeGroupWeight defines the static NodeGroup weight.
-type StaticNodeGroupWeight struct {
-	// NodeGroupNames specifies nodegroups with names.
-	// +required
-	NodeGroupNames []string `json:"nodeGroupNames"`
-
-	// Weight expressing the preference to the nodegroup(s) specified by 'TargetNodeGroup'.
-	// +required
-	Weight int64 `json:"weight"`
-}
-```
-
-### OverridePolicy API
-OverridePolicy specifies how to override paths of resources. It has especial support for pod API.
-
-```go
-// OverridePolicy represents the policy that overrides a group of resources to one or more nodegroups.
-type OverridePolicy struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	// Spec represents the desired behavior of OverridePolicy.
-	Spec OverrideSpec `json:"spec"`
-}
-
-// OverrideSpec defines the desired behavior of OverridePolicy.
-type OverrideSpec struct {
-	// OverrideRules defines a collection of override rules on target nodegroups.
+	TargetNodeGroups []TargetNodeGroups `json:"targetNodeGroups,omitempty"`
+	// TargetNodes represents the target nodes of workload to be deployed.
 	// +optional
-	OverrideRules []RuleWithNodeGroup `json:"overrideRules,omitempty"`
+	TargetNodes []TargetNodes `json:"targetNodes,omitempty"`
 }
 
-// RuleWithNodeGroup defines the override rules on nodegroups.
-type RuleWithNodeGroup struct {
-	// TargetNodeGroup defines restrictions on this override policy
-	// that only applies to resources propagated to the matching nodegroups.
-	// nil means matching all nodegroups.
-	// +optional
-	TargetNodeGroup []string `json:"targetNodeGroup,omitempty"`
+// TargetNodeGroups represents the target node groups of workload to be deployed.
+type TargetNodeGroups struct {
+	// Name represents the name of target node group
+	Name string `json:"name"`
+	// Overriders offers various alternatives to represent the override rules.
+	Overriders Overriders `json:"overriders,omitempty"`
+}
 
-	// Overriders represents the override rules that would apply on resources
-	// +required
+// TargetNodes represents the target nodes of workload to be deployed.
+type TargetNodes struct {
+	// Label of target nodes
+	Label labels.Selector `json:"label"`
+	// Overriders offers various alternatives to represent the override rules.
 	Overriders Overriders `json:"overriders"`
+}
+
+// ResourceTemplate represents the manifest workload to be deployed on managed node groups.
+type ResourceTemplate struct {
+	// Manifests represents a list of Kubernetes resources to be deployed on the managed node groups.
+	// +optional
+	Manifests []Manifest `json:"manifests,omitempty"`
 }
 
 // Overriders offers various alternatives to represent the override rules.
@@ -277,21 +178,12 @@ type RuleWithNodeGroup struct {
 // - ImageOverrider
 // - Plaintext
 type Overriders struct {
-	// Plaintext represents override rules defined with plaintext overriders.
+	// Replicas of deployment
 	// +optional
-	Plaintext []PlaintextOverrider `json:"plaintext,omitempty"`
-
+	Replicas int `json:"replicas,omitempty"`
 	// ImageOverrider represents the rules dedicated to handling image overrides.
 	// +optional
 	ImageOverrider []ImageOverrider `json:"imageOverrider,omitempty"`
-
-	// CommandOverrider represents the rules dedicated to handling container command
-	// +optional
-	CommandOverrider []CommandArgsOverrider `json:"commandOverrider,omitempty"`
-
-	// ArgsOverrider represents the rules dedicated to handling container args
-	// +optional
-	ArgsOverrider []CommandArgsOverrider `json:"argsOverrider,omitempty"`
 }
 
 // ImageOverrider represents the rules dedicated to handling image overrides.
@@ -323,10 +215,12 @@ type ImageOverrider struct {
 	// - v1.19.1
 	// - @sha256:dbcc1c35ac38df41fd2f5e4130b32ffdb93ebae8b3dbe638c23575912276fc9c
 	//
+	// +kubebuilder:validation:Enum=Registry;Repository;Tag
 	// +required
 	Component ImageComponent `json:"component"`
 
 	// Operator represents the operator which will apply on the image.
+	// +kubebuilder:validation:Enum=add;remove;replace
 	// +required
 	Operator OverriderOperator `json:"operator"`
 
@@ -347,49 +241,6 @@ type ImagePredicate struct {
 // ImageComponent indicates the components for image.
 type ImageComponent string
 
-// CommandArgsOverrider represents the rules dedicated to handling command/args overrides.
-type CommandArgsOverrider struct {
-	// The name of container
-	// +required
-	ContainerName string `json:"containerName"`
-
-	// Operator represents the operator which will apply on the command/args.
-	// +required
-	Operator OverriderOperator `json:"operator"`
-
-	// Value to be applied to command/args.
-	// Items in Value which will be appended after command/args when Operator is 'add'.
-	// Items in Value which match in command/args will be deleted when Operator is 'remove'.
-	// If Value is empty, then the command/args will remain the same.
-	// +optional
-	Value []string `json:"value,omitempty"`
-}
-
-const (
-	// Registry is the registry component of an image with format '[registry/]repository[:tag]'.
-	Registry ImageComponent = "Registry"
-
-	// Repository is the repository component of an image with format '[registry/]repository[:tag]'.
-	Repository ImageComponent = "Repository"
-
-	// Tag is the tag component of an image with format '[registry/]repository[:tag]'.
-	Tag ImageComponent = "Tag"
-)
-
-// PlaintextOverrider is a simple overrider that overrides target fields
-// according to path, operator and value.
-type PlaintextOverrider struct {
-	// Path indicates the path of target field
-	Path string `json:"path"`
-	// Operator indicates the operation on target field.
-	// Available operators are: add, update and remove.
-	Operator OverriderOperator `json:"operator"`
-	// Value to be applied to target field.
-	// Must be empty when operator is Remove.
-	// +optional
-	Value apiextensionsv1.JSON `json:"value,omitempty"`
-}
-
 // OverriderOperator is the set of operators that can be used in an overrider.
 type OverriderOperator string
 
@@ -400,20 +251,92 @@ const (
 	OverriderOpReplace OverriderOperator = "replace"
 )
 
-// OverridePolicyList is a collection of OverridePolicy.
-type OverridePolicyList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-
-	// Items holds a list of OverridePolicy.
-	Items []OverridePolicy `json:"items"`
+// Manifest represents a resource to be deployed on managed node groups.
+type Manifest struct {
+	// +kubebuilder:pruning:PreserveUnknownFields
+	runtime.RawExtension `json:",inline"`
 }
+
+// EdgeAppStatus defines the observed state of EdgeApplication.
+type EdgeAppStatus struct {
+	// Conditions contain the different condition statuses for this work.
+	// Valid condition types are:
+	// 1. Applied represents workload in EdgeApplication is applied successfully on a managed node groups.
+	// 2. Progressing represents workload in EdgeApplication is being applied on a managed node groups.
+	// 3. Available represents workload in EdgeApplication exists on the managed node groups.
+	// 4. Degraded represents the current state of workload does not match the desired
+	// state for a certain period.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ManifestStatuses contains running status of manifests in spec.
+	// +optional
+	ManifestStatuses []ManifestStatus `json:"manifestStatuses,omitempty"`
+}
+
+// ManifestStatus contains running status of a specific manifest in spec.
+type ManifestStatus struct {
+	// Identifier represents the identity of a resource linking to manifests in spec.
+	// +required
+	Identifier ResourceIdentifier `json:"identifier"`
+
+	// Status reflects running status of current manifest.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	Status *runtime.RawExtension `json:"status,omitempty"`
+}
+
+// ResourceIdentifier provides the identifiers needed to interact with any arbitrary object.
+type ResourceIdentifier struct {
+	// Ordinal represents an index in manifests list, so the condition can still be linked
+	// to a manifest even though manifest cannot be parsed successfully.
+	Ordinal int `json:"ordinal"`
+
+	// Group is the group of the resource.
+	Group string `json:"group,omitempty"`
+
+	// Version is the version of the resource.
+	Version string `json:"version"`
+
+	// Kind is the kind of the resource.
+	Kind string `json:"kind"`
+
+	// Resource is the resource type of the resource
+	Resource string `json:"resource"`
+
+	// Namespace is the namespace of the resource
+	Namespace string `json:"namespace"`
+
+	// Name is the name of the resource
+	Name string `json:"name"`
+}
+
+const (
+	// EdgeAppApplied represents that the resource defined in node groups is
+	// successfully applied on the managed node groups.
+	EdgeAppApplied string = "Applied"
+	// EdgeAppProgressing represents that the resource defined in node groups is
+	// in the progress to be applied on the managed node groups.
+	EdgeAppProgressing string = "Progressing"
+	// EdgeAppAvailable represents that all resources of the node groups exists on
+	// the managed node groups.
+	EdgeAppAvailable string = "Available"
+	// EdgeAppDegraded represents that the current state of node groups does not match
+	// the desired state for a certain period.
+	EdgeAppDegraded string = "Degraded"
+)
 ```
+
+## Use Cases
+* Create NodeGroup CRs to specify some node groups and nodes belonging to them.
+* Fill the `EdgeAppSpec.ResourceTemplate` field of EdgeApplication resource with the application you want to deploy.
+* Fill the `EdgeAppSpec.WorkloadScope` field of EdgeApplication resource to specify the instance numbers or other differences for each node group where you want to deploy the application.
+* Apply the EdgeApplication resource and check its status. 
 
 ### Example
 We give an example of how to use NodeGroup and PropagationPolicy APIs. 
 
-Assuming that we have 5 nodes at edge, 2 in Hangzhou and 3 in Beijing, called NodeA, NodeB, NodeC, NodeD and NodeE respectively. NodeA and NodeB, which are located in Hangzhou, have the label `location: hangzhou`. NodeC, NodeD and NodeE, which are located in Beijing, have the label `location: beijing`.  Also we have already had a deployment called nginx running in the cluster whose replicas is 5, and currently 2 pods running in Hangzhou and 3 pods running in Beijing.
+Assuming that we have 5 nodes at edge, 2 in Hangzhou and 3 in Beijing, called NodeA, NodeB, NodeC, NodeD and NodeE respectively. NodeA and NodeB, which are located in Hangzhou, have the label `location: hangzhou`. NodeC, NodeD and NodeE, which are located in Beijing, have the label `location: beijing`. We want to apply a deployment called nginx, having 2 instances in Hangzhou and 3 instances in Beijing. And we want to use the service scope feature making them can only be reached when clients are in the same node group as the pod instance.
 
 First, we create nodegroups called beijing and hangzhou. The yaml is as follows:
 
@@ -435,68 +358,74 @@ spec:
     location: beijing
 ```
 
-Second, create the propagation policy. In this case, we want 3 pods to run in Hangzhou and 2 pods to run in Beijing. Also, we want these pods to use their local image registry. Thus, we can apply the PropagationPolicy and OverridePolicy like this:
+Second, create the EdgeApplication API. In this case, we want 2 pods to run in Hangzhou and 3 pods to run in Beijing. Also, we want these pods to use their local image registry and enable the service scope feature. Thus, we can apply the EdgeApplication like this:
 
 ```yaml
 apiVersion: groupmanagement.kubeedge.io/v1alpha1
-kind: PropagationPolicy
+kind: EdgeApplication
 metadata:
-  name: nginx-propagationpolicy 
+  name: nginx-app 
 spec:
-  propagationStrategy: "StaticWeight" 
-  staticWeightList:
-  - nodeGroupNames:
-    - Beijing 
-    weight: 2
-  - nodeGroupNames:
-    - Hangzhou
-    weight: 3
----
-apiVersion: groupmanagement.kubeedge.io/v1alpha1
-kind: OverridePolicy
-metadata:
-  name: nginx-overridepolicy
-spec:
-  overrideRules:
-  - targetNodeGroup:
-    - Beijing
-    imageOverrider:
-    - component: "Registry"
-      operator: "replace"
-      value: "beijing.registry.io"
-  - targetNodeGroup:
-    - Hangzhou
-    imageOverrider:
-    - component: "Registry"
-      operator: "replace"
-      value: "hangzhou.registry.io"
+  resourceTemplate:
+    manifests:
+    - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: nginx
+    spec:
+      selector:
+        matchLabels:
+          app: nginx
+      template:
+        metadata:
+          labels:
+            app: nginx
+        spec:
+          containers:
+          - name: nginx
+            image: nginx:latest
+          ports:
+          - containerPort: 80
+    - apiVersion: v1
+    kind: Service
+    metadata:
+      name: nginx-service
+    spec:
+      selector:
+        app: nginx
+      ports:
+      - name: http
+        protocol: TCP
+        port: 80
+        targetPort: 8080
+      type: LoadBalancer
+  workloadScopes:
+    targetNodeGroups:
+      - name: hangzhou
+        overriders:
+          replicas: 2
+          imageOverrider:
+            - component: "registry"
+              operator: "replace"
+              value: "hangzhou.registry.io"
+      - name: beijing
+        overriders:
+          replicas: 3
+          imageOverrider:
+            - component: "registry"
+              operator: "replace"
+              value: "beijing.registry.io"
 ```
+Then two deployments called `nginx-hangzhou` and `nginx-beijing` will be created for hangzhou nodegroup and beijing nodegroup with `replicas: 2` and `replicas: 3` respectively. Pods running in hangzhou nodegroup will use the image `hangzhou.registry.io/nginx:latest` and pods running in beijing nodegroup will use the image `beijing.resistry.io/nginx.latest`. 
 
-Then, add labels 
-
-`groupmanagement.kubeedge.io/required-propagationpolicy: nginx-propagationpolicy`  
-`groupmanagement.kubeedge.io/required-overridepolicy: nginx-overridepolicy` 
-
-to the deployment. Actually, the operation order doesn't matter. You can add labels first and then apply policies as well. In either way, we will get what we want.
+The service in the EdgeApplication will also be created and injected with label `groupmanagement.kubeedge.io/edgeapplication-name: nginx-app`. The endpointslice filter in the cloudcore will check the relative EdgeApplication when sending the endpointslice to the edgecore in some nodegroup. It will filter out endpoints not in that nodegroup. Then, clients running in hangzhou node group can only reach the 2 pod instances that are also running in hangzhou node group. The situation of beijing node group is the same.
 
 ## Plan
 ### Develop Plan
 - alpha
   - [ ] Support Deployment
-  - [ ] Support NumRange PropagationStrategy
-  - [ ] Support ImageOverrider, ArgsOverrider and CommandOverrider
+  - [ ] Support override of replicas and image field
+  - [ ] Collect status of manifested subresource of EdgeApplication
 - beta
-  - [ ] Support Statefulset, DaemonSet, Job
-  - [ ] Support PlaintextOverrider
-  - [ ] Support StaticWeight PropagationStrategy
-- v1
-  - [ ] Support CRD application
-### Test Plan
-- Unit Test covering:
-  - [ ] `GroupSchedulingExtender` can filter out nodes which the pod should not be scheduled to.
-  - [ ] `GroupSchedulingExtender` can give a suitable score for each candidate node.
-
-- E2E Test covering:
-  - [ ] Deploy scheduler-extenders in kubeedge cluster.
-  - [ ] Apply NodeGroup and check status.
-  - [ ] Apply PropagationPolicy and check the distribution status of pods.
+  - [ ] Support service scope feature
+  - [ ] Support ingress
