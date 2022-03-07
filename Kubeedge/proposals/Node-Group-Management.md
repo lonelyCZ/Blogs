@@ -338,7 +338,7 @@ kind: EdgeApplication
 metadata:
   name: nginx-app 
 spec:
-  resourceTemplate:
+  workloadTemplate:
     manifests:
     - apiVersion: apps/v1
     kind: Deployment
