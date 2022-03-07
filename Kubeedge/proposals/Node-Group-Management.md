@@ -7,28 +7,28 @@ authors:
 approvers:
   
 creation-date: 2021-11-03
-last-updated: 2022-03-04
+last-updated: 2022-03-07
 status: implementable
 ---
 # Node Group Management
 
 - [Node Group Management](#node-group-management)
-  - [Summary](#summary)
-  - [Motivation](#motivation)
-    - [Goals](#goals)
-    - [Non-goals](#non-goals)
-  - [Design Details](#design-details)
-    - [Architecture](#architecture)
-    - [GroupManagementControllerManager](#groupmanagementcontrollermanager)
-      - [NodeGroupController](#nodegroupcontroller)
-      - [EdgeApplicationController](#edgeapplicationcontroller)
-    - [EndpointSlice Filter in CloudCore](#endpointslice-filter-in-cloudcore)
-    - [NodeGroup API](#nodegroup-api)
-    - [EdgeApplication API](#edgeapplication-api)
-  - [Use Cases](#use-cases)
-    - [Example](#example)
-  - [Plan](#plan)
-    - [Develop Plan](#develop-plan)
+	- [Summary](#summary)
+	- [Motivation](#motivation)
+		- [Goals](#goals)
+		- [Non-goals](#non-goals)
+	- [Design Details](#design-details)
+		- [Architecture](#architecture)
+		- [GroupManagementControllerManager](#groupmanagementcontrollermanager)
+			- [NodeGroupController](#nodegroupcontroller)
+			- [EdgeApplicationController](#edgeapplicationcontroller)
+		- [EndpointSlice Filter in CloudCore](#endpointslice-filter-in-cloudcore)
+		- [NodeGroup API](#nodegroup-api)
+		- [EdgeApplication API](#edgeapplication-api)
+	- [Use Cases](#use-cases)
+		- [Example](#example)
+	- [Plan](#plan)
+		- [Develop Plan](#develop-plan)
 
 ## Summary
 In some scenarios, we may want to deploy an application among several locations. In this case, the typical practice is to write a deployment for each location, which means we have to manage several deployments for one application. With the number of applications and their required locations continuously increasing, it will be more and more complicated to manage.  
@@ -47,7 +47,7 @@ However, with the number of locations increasing, operation and maintenance of a
 * Use a single resource to manage an application deployed at different locations.
 * Users can specify the number of pods and the differences of pod instances running in each node group.
 * Non-intrusive for kubernetes native control plane
-* Limit service endpoints in the same location as the client pod.
+* Limit service endpoints in the same location as the client pod, called service scope feature below.
 
 ### Non-goals
 * Create another systematic machanism to take over the work of application lifetime management, such as rolling update which is the responsibility of deployment.
@@ -72,7 +72,7 @@ The EdgeApplication resource contains the template of the application to deploy.
 #### EdgeApplicationController
 `EdgeApplicationController` is responsible for creating, updating and deleting the subresources manifested in the EdgeApplication.
 1. When EdgeApplication has been created, it will create and override the subresource for each specified node group.
-2. When EdgeApplication has been updated, it will update relative  fields of subresources.
+2. When EdgeApplication has been updated, it will update relative fields of subresources.
 3. When EdgeApplication has been deleted, it will delete all manifested subresources.  
 
 ### EndpointSlice Filter in CloudCore
@@ -133,52 +133,38 @@ type EdgeApplication struct {
 
 // EdgeAppSpec defines the desired state of EdgeApplication.
 type EdgeAppSpec struct {
-	// ResourceTemplate represents the manifest workload to be deployed on managed node groups.
-	ResourceTemplate ResourceTemplate `json:"resourceTemplate,omitempty"`
-	// WorkloadScopes represents the scope of workload to be deployed.
+	// WorkloadTemplate represents original templates of manifested resources to be deployed in node groups.
+	WorkloadTemplate ResourceTemplate `json:"workloadTemplate,omitempty"`
+	// WorkloadScopes represents which node groups the workload will be deployed in.
 	WorkloadScopes WorkloadScope `json:"workloadScopes"`
 }
 
-// WorkloadScope represents the scope of workload to be deployed.
+// WorkloadScope represents which node groups the workload to be deployed in.
 type WorkloadScope struct {
 	// TargetNodeGroups represents the target node groups of workload to be deployed.
 	// +optional
 	TargetNodeGroups []TargetNodeGroups `json:"targetNodeGroups,omitempty"`
-	// TargetNodes represents the target nodes of workload to be deployed.
-	// +optional
-	TargetNodes []TargetNodes `json:"targetNodes,omitempty"`
 }
 
-// TargetNodeGroups represents the target node groups of workload to be deployed.
+// TargetNodeGroups represents the target node groups of workload to be deployed, including
+// override rules to apply for this node group.
 type TargetNodeGroups struct {
 	// Name represents the name of target node group
 	Name string `json:"name"`
-	// Overriders offers various alternatives to represent the override rules.
+    // Overriders represents the override rules that would apply on resources.
 	Overriders Overriders `json:"overriders,omitempty"`
 }
 
-// TargetNodes represents the target nodes of workload to be deployed.
-type TargetNodes struct {
-	// Label of target nodes
-	Label labels.Selector `json:"label"`
-	// Overriders offers various alternatives to represent the override rules.
-	Overriders Overriders `json:"overriders"`
-}
-
-// ResourceTemplate represents the manifest workload to be deployed on managed node groups.
+// ResourceTemplate represents original templates of manifested resources to be deployed in node groups.
 type ResourceTemplate struct {
 	// Manifests represents a list of Kubernetes resources to be deployed on the managed node groups.
 	// +optional
 	Manifests []Manifest `json:"manifests,omitempty"`
 }
 
-// Overriders offers various alternatives to represent the override rules.
-//
-// If more than one alternatives exist, they will be applied with following order:
-// - ImageOverrider
-// - Plaintext
+// Overriders represents the override rules that would apply on resources.
 type Overriders struct {
-	// Replicas of deployment
+	// Replicas will override the replicas field of deployment
 	// +optional
 	Replicas int `json:"replicas,omitempty"`
 	// ImageOverrider represents the rules dedicated to handling image overrides.
@@ -257,19 +243,9 @@ type Manifest struct {
 	runtime.RawExtension `json:",inline"`
 }
 
-// EdgeAppStatus defines the observed state of EdgeApplication.
+// EdgeAppStatus defines the observed status of workloads.
 type EdgeAppStatus struct {
-	// Conditions contain the different condition statuses for this work.
-	// Valid condition types are:
-	// 1. Applied represents workload in EdgeApplication is applied successfully on a managed node groups.
-	// 2. Progressing represents workload in EdgeApplication is being applied on a managed node groups.
-	// 3. Available represents workload in EdgeApplication exists on the managed node groups.
-	// 4. Degraded represents the current state of workload does not match the desired
-	// state for a certain period.
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	// ManifestStatuses contains running status of manifests in spec.
+	// ManifestStatuses contains a list of running statuses of generated workloads.
 	// +optional
 	ManifestStatuses []ManifestStatus `json:"manifestStatuses,omitempty"`
 }
@@ -280,10 +256,12 @@ type ManifestStatus struct {
 	// +required
 	Identifier ResourceIdentifier `json:"identifier"`
 
-	// Status reflects running status of current manifest.
-	// +kubebuilder:pruning:PreserveUnknownFields
+	// Conditions contain the different condition statuses for this manifest.
+	// Valid condition types are:
+	// 1. Processing: this workload is under processing and the current state of manifest does not match the desired. 
+	// 2. Available: the current status of this workload matches the desired.
 	// +optional
-	Status *runtime.RawExtension `json:"status,omitempty"`
+	Conditions metav1.Condition `json:"conditions,omitempty"`
 }
 
 // ResourceIdentifier provides the identifiers needed to interact with any arbitrary object.
@@ -312,25 +290,19 @@ type ResourceIdentifier struct {
 }
 
 const (
-	// EdgeAppApplied represents that the resource defined in node groups is
-	// successfully applied on the managed node groups.
-	EdgeAppApplied string = "Applied"
-	// EdgeAppProgressing represents that the resource defined in node groups is
-	// in the progress to be applied on the managed node groups.
-	EdgeAppProgressing string = "Progressing"
-	// EdgeAppAvailable represents that all resources of the node groups exists on
-	// the managed node groups.
+	// EdgeAppProcessing represents that the workload is under processing and currently
+	// the status of the workload does not match the desired.
+	EdgeAppProcessing string = "Processing"
+	// EdgeAppAvailable represents that the workload has been applied successfully and the current
+	// status matches the desired.
 	EdgeAppAvailable string = "Available"
-	// EdgeAppDegraded represents that the current state of node groups does not match
-	// the desired state for a certain period.
-	EdgeAppDegraded string = "Degraded"
 )
 ```
 
 ## Use Cases
 * Create NodeGroup CRs to specify some node groups and nodes belonging to them.
-* Fill the `EdgeAppSpec.ResourceTemplate` field of EdgeApplication resource with the application you want to deploy.
-* Fill the `EdgeAppSpec.WorkloadScope` field of EdgeApplication resource to specify the instance numbers or other differences for each node group where you want to deploy the application.
+* Fill the `EdgeAppSpec.WorkloadTemplate` field of EdgeApplication with the application you want to deploy.
+* Fill the `EdgeAppSpec.WorkloadScope` field of EdgeApplication to specify the instance numbers or other differences for each node group where you want to deploy the application.
 * Apply the EdgeApplication resource and check its status. 
 
 ### Example
@@ -358,7 +330,7 @@ spec:
     location: beijing
 ```
 
-Second, create the EdgeApplication API. In this case, we want 2 pods to run in Hangzhou and 3 pods to run in Beijing. Also, we want these pods to use their local image registry and enable the service scope feature. Thus, we can apply the EdgeApplication like this:
+Second, create the EdgeApplication resource. In this case, we want 2 pods to run in Hangzhou and 3 pods to run in Beijing. Also, we want these pods to use their local image registry and enable the service scope feature. Thus, we can apply the EdgeApplication like this:
 
 ```yaml
 apiVersion: groupmanagement.kubeedge.io/v1alpha1
